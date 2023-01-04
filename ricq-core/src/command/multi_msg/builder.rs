@@ -61,7 +61,7 @@ impl super::super::super::Engine {
 
     pub fn calculate_validation_data(
         &self,
-        messages: Vec<super::ForwardMessage>,
+        messages: Vec<ForwardMessage>,
         group_code: i64,
     ) -> Vec<u8> {
         let PackedMessage {
@@ -88,11 +88,7 @@ impl super::super::super::Engine {
         encoder.finish().unwrap_or_default()
     }
 
-    fn pack_forward_msg(
-        &self,
-        messages: Vec<super::ForwardMessage>,
-        group_code: i64,
-    ) -> PackedMessage {
+    fn pack_forward_msg(&self, messages: Vec<ForwardMessage>, group_code: i64) -> PackedMessage {
         let mut packed_buffers = HashMap::default();
         let msgs: Vec<pb::msg::Message> = messages
             .into_iter()

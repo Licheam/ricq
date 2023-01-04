@@ -77,16 +77,16 @@ pub struct Client {
     packet_handler: RwLock<HashMap<String, broadcast::Sender<Packet>>>,
 }
 
-impl super::Client {
-    /// 新建 Clinet
+impl Client {
+    /// 新建 Client
     ///
     /// **Notice: 该方法仅新建 Client 需要调用 start 方法连接到服务器**
     pub fn new<H>(device: Device, version: Version, handler: H) -> Client
     where
-        H: crate::client::handler::Handler + 'static + Sync + Send,
+        H: handler::Handler + 'static + Sync + Send,
     {
-        let (out_pkt_sender, _) = tokio::sync::broadcast::channel(1024);
-        let (disconnect_signal, _) = tokio::sync::broadcast::channel(8);
+        let (out_pkt_sender, _) = broadcast::channel(1024);
+        let (disconnect_signal, _) = broadcast::channel(8);
 
         Client {
             handler: Box::new(handler),
@@ -115,12 +115,12 @@ impl super::Client {
         }
     }
 
-    /// 新建 Clinet
+    /// 新建 Client
     ///
     /// **Notice: 该方法仅新建 Client 需要调用 start 方法连接到服务器**
     pub fn new_with_config<H>(config: crate::Config, handler: H) -> Self
     where
-        H: crate::client::handler::Handler + 'static + Sync + Send,
+        H: handler::Handler + 'static + Sync + Send,
     {
         Self::new(config.device, config.version, handler)
     }
@@ -141,7 +141,7 @@ impl super::Client {
 
     /// 向服务器发包并等待接收返回的包，15 秒后超时返回 `Err(RQError::Timeout)`
     pub async fn send_and_wait(&self, pkt: Packet) -> RQResult<Packet> {
-        tracing::trace!("send_and_waitting pkt {}-{},", pkt.command_name, pkt.seq_id);
+        tracing::trace!("send_and_waiting pkt {}-{},", pkt.command_name, pkt.seq_id);
         let seq = pkt.seq_id;
         let expect = pkt.command_name.clone();
         let data = self.engine.read().await.transport.encode_packet(pkt);
@@ -155,7 +155,7 @@ impl super::Client {
             packet_promises.remove(&seq);
             return Err(RQError::Network);
         }
-        match tokio::time::timeout(std::time::Duration::from_secs(15), receiver).await {
+        match tokio::time::timeout(Duration::from_secs(15), receiver).await {
             Ok(p) => p.unwrap().check_command_name(&expect),
             Err(_) => {
                 tracing::trace!("waiting pkt {}-{} timeout", expect, seq);
