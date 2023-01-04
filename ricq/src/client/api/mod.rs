@@ -1,13 +1,16 @@
+use std::io::Read;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::time::UNIX_EPOCH;
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes, BytesMut};
 use cached::Cached;
+use prost::Message;
 
 use ricq_core::command::message_svc::MessageSyncResponse;
 use ricq_core::command::oidb_svc::*;
 use ricq_core::common::{group_code2uin, RQAddr};
+use ricq_core::crypto::qqtea_decrypt;
 use ricq_core::highway::BdhInput;
 use ricq_core::msg::MessageChain;
 use ricq_core::pb;
@@ -15,6 +18,7 @@ use ricq_core::structs::Status;
 use ricq_core::structs::SummaryCardInfo;
 use ricq_core::structs::{ForwardMessage, MessageReceipt};
 
+use crate::ext::http::http_get;
 use crate::jce::SvcDevLoginInfo;
 use crate::{RQError, RQResult};
 
@@ -382,12 +386,65 @@ impl super::Client {
             let addr = SocketAddr::from(RQAddr(resp.down_ip.pop().ok_or(RQError::EmptyField("down_ip"))?,resp.down_port.pop().ok_or(RQError::EmptyField("down_port"))? as u16));
             format!("http://{addr}")
         };
-        let _url = format!(
+        let url = format!(
             "{}{}",
             prefix,
             String::from_utf8_lossy(&resp.thumb_down_para)
         );
-        let _encrypt_key = resp.msg_key;
+        let encrypt_key = resp.msg_key;
+        let b = http_get(url, "").await?;
+        let mut r = BytesMut::from(&b[1..]);
+        let i1 = r.get_i32();
+        let i2 = r.get_i32();
+        if i1 > 0 {
+            r.copy_to_bytes(i1 as usize);
+        }
+        let data = qqtea_decrypt(&r.copy_to_bytes(i2 as usize), &encrypt_key);
+        let lb = pb::longmsg::LongRspBody::decode(&*data)?;
+        if lb.msg_down_rsp.is_empty() {
+            return Err(RQError::EmptyField("long_resp_body.msg_down_resp"));
+        }
+        let msg_content = &lb.msg_down_rsp[0].msg_content;
+        let mut uc = vec![0; msg_content.len()];
+        let _ = flate2::read::GzDecoder::new(msg_content.as_slice()).read(&mut uc);
+        let multi_msg = pb::msg::PbMultiMsgTransmit::decode(&*uc)?;
+        if multi_msg.pb_item_list.is_empty() {
+            return Ok(vec![]);
+        }
+        for i in 0..4.min(multi_msg.msg.len()) {
+            let m = &multi_msg.msg[i];
+            if m.head.is_none() {
+                continue;
+            }
+            let head = m.head.as_ref().unwrap();
+            let _sender = if head.msg_type.is_some()
+                && head.msg_type.unwrap() == 82
+                && head.group_info.is_some()
+            {
+                if head.group_info.is_none() {
+                    "".into()
+                } else {
+                    let group_info = head.group_info.as_ref();
+                    if group_info.is_some() {
+                        let group_card = &group_info.unwrap().group_card.as_ref();
+                        if group_card.is_some() {
+                            String::from_utf8_lossy(group_card.unwrap()).to_string()
+                        } else {
+                            "".to_string()
+                        }
+                    } else {
+                        "".to_string()
+                    }
+                }
+            } else {
+                let from_nick = head.from_nick.as_ref();
+                if from_nick.is_some() {
+                    from_nick.unwrap().to_string()
+                } else {
+                    "".to_string()
+                }
+            };
+        }
         // TODO get data and decrypt
         // TODO decoder -> LongRspBody
         // TODO uncompress
